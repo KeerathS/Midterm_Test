@@ -7,7 +7,6 @@
 #include <vector>
 #include <sstream>
 
-
 #include "cartCentering.h"
 
 using namespace std;
@@ -281,8 +280,7 @@ double evalOp(string op, double x, double y = 0) {
   return isnan(result) || !isfinite(result) ? 0 : result;
 }
 
-double LinkedBinaryTree::evaluateExpression(const Position& p, double a,
-                                            double b) {
+double LinkedBinaryTree::evaluateExpression(const Position& p, double a, double b) {
   if (!p.isExternal()) {
     auto x = evaluateExpression(p.left(), a, b);
     if (arity(p.v->elt) > 1) {
@@ -300,7 +298,45 @@ double LinkedBinaryTree::evaluateExpression(const Position& p, double a,
       return stod(p.v->elt);
   }
 }
+//=====================
+/*
+void LinkedBinaryTree::deleteSubtreeMutator(mt19937& rng) {
+    // Get all positions in the tree.
+    PositionList pl = positions();
+    if (pl.size() <= 1) return;  // nothing to delete if only the root exists
 
+    // Pick a random non-root node.
+    int randIndex = randInt(rng, 1, pl.size() - 1);
+    Node* target = pl[randIndex].v;
+
+    // Define a simple recursive function to free a subtree.
+    auto freeSubtree = [&](Node* node, auto&& freeSubtreeRef) -> void {
+        if (node == nullptr) return;
+        freeSubtreeRef(node->left, freeSubtreeRef);
+        freeSubtreeRef(node->right, freeSubtreeRef);
+        delete node;
+    };
+
+    // Delete both children of the target node.
+    freeSubtree(target->left, freeSubtree);
+    freeSubtree(target->right, freeSubtree);
+    target->left = nullptr;
+    target->right = nullptr;
+
+    // Replace target's element with a random terminal to ensure it's valid.
+    int choice = randInt(rng, 0, 2);
+    if (choice == 0)
+        target->elt = "a";
+    else if (choice == 1)
+        target->elt = "b";
+    else {
+        double val = (randDouble(rng) * 2) - 1;
+        target->elt = to_string(val);
+    }
+}
+
+*/
+//====================
 void LinkedBinaryTree::deleteSubtreeMutator(mt19937& rng) {
   PositionList pl = positions();
   // If only the root exists, there’s nothing to delete.
@@ -316,14 +352,19 @@ void LinkedBinaryTree::deleteSubtreeMutator(mt19937& rng) {
   int idx = randInt(rng, 0, candidates.size() - 1);
   Node* target = candidates[idx];
   Node* parent = target->par;
+  if (parent == nullptr) return;  // safety check
 
-  // Disconnect target from its parent.
+  // Create a new terminal node ("a") to replace the deleted subtree.
+  Node* newNode = new Node;
+  newNode->elt = "a";
+  newNode->par = parent;
+
   if (parent->left == target)
-    parent->left = nullptr;
+    parent->left = newNode;
   else if (parent->right == target)
-    parent->right = nullptr;
+    parent->right = newNode;
 
-  // Recursively free the nodes in the selected subtree.
+  // Free the removed subtree.
   std::function<void(Node*)> freeSubtree = [&](Node* node) {
     if (node == nullptr)
       return;
@@ -334,41 +375,59 @@ void LinkedBinaryTree::deleteSubtreeMutator(mt19937& rng) {
   freeSubtree(target);
 }
 
+
+
+//===============================================================================================================
+
+
+
+
+
 void LinkedBinaryTree::addSubtreeMutator(mt19937& rng, const int maxDepth) {
+  if (_root == NULL) return;
+
+  // Get all positions in the tree.
   PositionList pl = positions();
-  vector<Node*> candidates;
-  // Look for nodes that have a missing left or right child.
-  for (auto pos : pl) {
-    if (pos.v->left == nullptr || pos.v->right == nullptr)
-      candidates.push_back(pos.v);
+  if (pl.empty()) return;
+
+  // Pick a random node.
+  int randIndex = randInt(rng, 0, pl.size() - 1);
+  Node* nodeToMutate = pl[randIndex].v;
+
+  // Save the original element.
+  string originalElt = nodeToMutate->elt;
+
+  // Choose a random operator.
+  vector<string> operators = {"+", "-", "*", "/", ">", "abs"};
+  int opIndex = randInt(rng, 0, operators.size() - 1);
+  string op = operators[opIndex];
+
+  // Replace the node's element with the new operator.
+  nodeToMutate->elt = op;
+
+  // If the node was terminal, attach a left child with the original element.
+  if (nodeToMutate->left == NULL) {
+    addLeftChild(Position(nodeToMutate));
+    nodeToMutate->left->elt = originalElt;
   }
-  if (candidates.empty()) return;
 
-  int idx = randInt(rng, 0, candidates.size() - 1);
-  Node* target = candidates[idx];
-
-  // Decide which child pointer to fill.
-  bool addLeft = false;
-  bool addRight = false;
-  if (target->left == nullptr && target->right == nullptr) {
-    addLeft = randChoice(rng);
-    addRight = !addLeft;
-  } else if (target->left == nullptr) {
-    addLeft = true;
-  } else if (target->right == nullptr) {
-    addRight = true;
+  // If the operator is binary and there is no right child, add one.
+  if (arity(op) > 1 && nodeToMutate->right == NULL) {
+    addRightChild(Position(nodeToMutate));
+    int choice = randInt(rng, 0, 2);
+    if (choice == 0)
+      nodeToMutate->right->elt = "a";
+    else if (choice == 1)
+      nodeToMutate->right->elt = "b";
+    else {
+      double val = (randDouble(rng) * 2) - 1;
+      nodeToMutate->right->elt = to_string(val);
+    }
   }
-
-  // Create a new subtree and attach it.
-  Node* newSubtree = new Node;
-  newSubtree->par = target;
-  randomExpressionTree(newSubtree, maxDepth, rng);
-
-  if (addLeft)
-    target->left = newSubtree;
-  else if (addRight)
-    target->right = newSubtree;
 }
+
+
+
 
 bool operator<(const LinkedBinaryTree& x, const LinkedBinaryTree& y) {
   return x.getScore() < y.getScore();
@@ -401,37 +460,52 @@ LinkedBinaryTree createExpressionTree(string postfix) {
 }
 
 void LinkedBinaryTree::randomExpressionTree(Node* p, const int& maxDepth, mt19937& rng) {
-  // At max depth or with a 30% chance (if not the root), choose a terminal.
-  if (maxDepth == 0 || (maxDepth > 0 && p->depth() > 0 && randDouble(rng) < 0.3)) {
-    vector<string> terminals = {"a", "b"};
-    int idx = randInt(rng, 0, terminals.size() - 1);
-    p->elt = terminals[idx];
-    p->left = nullptr;
-    p->right = nullptr;
+  if (p == NULL) return;
+
+  if (maxDepth <= 0) {
+    // Terminal node: choose between variable 'a', 'b' or a constant.
+    int choice = randInt(rng, 0, 2);
+    if (choice == 0)
+      p->elt = "a";
+    else if (choice == 1)
+      p->elt = "b";
+    else {
+      double val = (randDouble(rng) * 2) - 1;
+      p->elt = to_string(val);
+    }
     return;
   }
-  // Decide whether to use a unary operator ("abs") with probability 20%.
-  if (randDouble(rng) < 0.2 && maxDepth >= 1) {
-    p->elt = "abs";
-    p->left = new Node;
-    p->left->par = p;
-    randomExpressionTree(p->left, maxDepth - 1, rng);
-    p->right = nullptr; // unary operator: no right child
-  } else {
-    // Otherwise, choose a binary operator from { "+", "-", "*", "/", ">" }.
-    vector<string> binaryOps = {"+", "-", "*", "/", ">"};
-    int idx = randInt(rng, 0, binaryOps.size() - 1);
-    p->elt = binaryOps[idx];
+
+  // Decide whether to create an operator node.
+  bool createOperator = (maxDepth > 1) ? randChoice(rng) : false;
+  if (createOperator) {
+    vector<string> operators = {"+", "-", "*", "/", ">", "abs"};
+    int opIndex = randInt(rng, 0, operators.size() - 1);
+    string op = operators[opIndex];
+    p->elt = op;
     // Create left child.
-    p->left = new Node;
-    p->left->par = p;
+    addLeftChild(Position(p));
     randomExpressionTree(p->left, maxDepth - 1, rng);
-    // Create right child.
-    p->right = new Node;
-    p->right->par = p;
-    randomExpressionTree(p->right, maxDepth - 1, rng);
+    // If operator is binary, create right child.
+    if (arity(op) > 1) {
+      addRightChild(Position(p));
+      randomExpressionTree(p->right, maxDepth - 1, rng);
+    }
+  } else {
+    // Terminal node.
+    int choice = randInt(rng, 0, 2);
+    if (choice == 0)
+      p->elt = "a";
+    else if (choice == 1)
+      p->elt = "b";
+    else {
+      double val = (randDouble(rng) * 2) - 1;
+      p->elt = to_string(val);
+    }
   }
 }
+
+//===================================================
 
 LinkedBinaryTree createRandExpressionTree(int max_depth, mt19937& rng) {
   LinkedBinaryTree t;
@@ -469,6 +543,7 @@ void evaluate(mt19937& rng, LinkedBinaryTree& t, const int& num_episode,
 }
 
 int main() {
+
   mt19937 rng(42);
   // Experiment parameters
   const int NUM_TREE = 50;
@@ -544,4 +619,5 @@ int main() {
   std::cout << "Size: " << best_tree.size() << std::endl;
   std::cout << "Depth: " << best_tree.depth() << std::endl;
   std::cout << "Fitness: " << best_tree.getScore() << std::endl << std::endl;
+
 }
