@@ -5,7 +5,6 @@
 #include <random>
 #include <stack>
 #include <vector>
-#include <sstream>
 
 #include "cartCentering.h"
 
@@ -162,6 +161,10 @@ class LinkedBinaryTree {
   }
   void deleteSubtreeMutator(mt19937& rng);
   void addSubtreeMutator(mt19937& rng, const int maxDepth);
+  void crossover(LinkedBinaryTree& other, mt19937& rng, int maxDepth);
+
+
+
 
  protected:                                        // local utilities
   void preorder(Node* v, PositionList& pl) const;  // preorder utility
@@ -172,6 +175,8 @@ class LinkedBinaryTree {
  private:
   Node* _root;  // pointer to the root
 };
+
+
 
 // add the tree rooted at node child as this tree's left child
 void LinkedBinaryTree::addLeftChild(const Position& p, const Node* child) {
@@ -336,7 +341,7 @@ void LinkedBinaryTree::deleteSubtreeMutator(mt19937& rng) {
 }
 
 */
-//====================
+//===================================================
 void LinkedBinaryTree::deleteSubtreeMutator(mt19937& rng) {
   PositionList pl = positions();
   // If only the root exists, there’s nothing to delete.
@@ -424,6 +429,82 @@ void LinkedBinaryTree::addSubtreeMutator(mt19937& rng, const int maxDepth) {
       nodeToMutate->right->elt = to_string(val);
     }
   }
+}
+
+//===============================================================================================================
+
+
+void LinkedBinaryTree::crossover(LinkedBinaryTree& other, mt19937& rng, int maxDepth) {
+  // Gather all nodes in *this
+  PositionList plA = positions();
+  // Gather all nodes in 'other'
+  PositionList plB = other.positions();
+
+  // If either tree is too small to pick a subtree, skip
+  if (plA.size() < 2 || plB.size() < 2) return;
+
+  // Pick a random non-root node in each tree
+  int idxA = randInt(rng, 1, plA.size() - 1);  // skip root index 0
+  int idxB = randInt(rng, 1, plB.size() - 1);
+
+  Node* nodeA = plA[idxA].v;
+  Node* nodeB = plB[idxB].v;
+  Node* parentA = nodeA->par;
+  Node* parentB = nodeB->par;
+  if (!parentA || !parentB) return; // safety check
+
+  // Swap child pointers
+  if (parentA->left == nodeA)
+    parentA->left = nodeB;
+  else
+    parentA->right = nodeB;
+
+  if (parentB->left == nodeB)
+    parentB->left = nodeA;
+  else
+    parentB->right = nodeA;
+
+  // Swap parent pointers
+  Node* temp = nodeA->par;
+  nodeA->par = nodeB->par;
+  nodeB->par = temp;
+
+  // Depth check: if either tree is now too deep, undo swap
+  if (depth() > maxDepth || other.depth() > maxDepth) {
+    // Re-swap them back
+    // Re-attach nodeA to parentA
+    if (parentA->left == nodeB)
+      parentA->left = nodeA;
+    else
+      parentA->right = nodeA;
+
+    if (parentB->left == nodeA)
+      parentB->left = nodeB;
+    else
+      parentB->right = nodeB;
+
+    // Swap parent pointers back
+    temp = nodeA->par;
+    nodeA->par = nodeB->par;
+    nodeB->par = temp;
+  }
+}
+
+LinkedBinaryTree pickParentTournament(const std::vector<LinkedBinaryTree>& pop,
+                                      std::mt19937& rng,
+                                      int survivors,
+                                      int k = 3)
+{
+  // Pick the first candidate
+  LinkedBinaryTree best = pop[randInt(rng, 0, survivors - 1)];
+  // Compare with (k-1) more random candidates
+  for (int i = 1; i < k; i++) {
+    LinkedBinaryTree candidate = pop[randInt(rng, 0, survivors - 1)];
+    if (candidate.getScore() > best.getScore()) {
+      best = candidate;
+    }
+  }
+  return best;
 }
 
 
@@ -542,8 +623,31 @@ void evaluate(mt19937& rng, LinkedBinaryTree& t, const int& num_episode,
   t.setSteps(mean_steps / num_episode);
 }
 
-int main() {
+#include <cmath> // for std::fabs
 
+struct LexLessThan {
+  bool operator()(const LinkedBinaryTree &x, const LinkedBinaryTree &y) const {
+    double diff = x.getScore() - y.getScore();
+
+    // If scores are within 0.01, prefer the smaller tree (fewer nodes).
+    if (std::fabs(diff) < 0.01) {
+      // If x is bigger than y, x is considered "less than" (i.e. sorted earlier).
+      // That way, smaller trees "win" when scores are close.
+      return x.size() > y.size();
+    }
+    else {
+      // Otherwise, compare by score normally.
+      // If x's score is less than y's, x is "less than" y.
+      return x.getScore() < y.getScore();
+    }
+  }
+};
+
+
+
+#include <fstream> // for file output
+
+int main() {
   mt19937 rng(42);
   // Experiment parameters
   const int NUM_TREE = 50;
@@ -553,71 +657,104 @@ int main() {
   const int MAX_GENERATIONS = 100;
   const bool PARTIALLY_OBSERVABLE = false;
 
-  // Create an initial "population" of expression trees
+  // Open a file to write CSV results for the "rand init + crossover + mutation" experiment.
+  std::ofstream resultsFile("results_crossover.csv");
+  resultsFile << "generation,fitness,steps,size,depth\n";
+
+  // Create an initial population using random initialization.
   vector<LinkedBinaryTree> trees;
   for (int i = 0; i < NUM_TREE; i++) {
     LinkedBinaryTree t = createRandExpressionTree(MAX_DEPTH_INITIAL, rng);
     trees.push_back(t);
   }
 
-  // Genetic Algorithm loop
   LinkedBinaryTree best_tree;
   std::cout << "generation,fitness,steps,size,depth" << std::endl;
   for (int g = 1; g <= MAX_GENERATIONS; g++) {
-
-    // Fitness evaluation
+    // Evaluate each tree over NUM_EPISODE episodes.
     for (auto& t : trees) {
-      if (t.getGeneration() < g - 1) continue;  // skip if not new
+      if (t.getGeneration() < g - 1) continue;  // Only evaluate trees born this generation.
       evaluate(rng, t, NUM_EPISODE, false, PARTIALLY_OBSERVABLE);
     }
 
-    // sort trees using overloaded "<" op (worst->best)
+    // Sort trees (from worst to best) using your overloaded operator<.
     std::sort(trees.begin(), trees.end());
-
-    // // sort trees using comparaor class (worst->best)
-    // std::sort(trees.begin(), trees.end(), LexLessThan());
-
-    // erase worst 50% of trees (first half of vector)
+    // Erase the worst 50% of trees.
     trees.erase(trees.begin(), trees.begin() + NUM_TREE / 2);
 
-    // Print stats for best tree
+    // The best tree is now the last element.
     best_tree = trees[trees.size() - 1];
-    std::cout << g << ",";
-    std::cout << best_tree.getScore() << ",";
-    std::cout << best_tree.getSteps() << ",";
-    std::cout << best_tree.size() << ",";
-    std::cout << best_tree.depth() << std::endl;
 
-    // Selection and mutation
+    // Print and write the current generation statistics.
+    std::cout << g << ","
+              << best_tree.getScore() << ","
+              << best_tree.getSteps() << ","
+              << best_tree.size() << ","
+              << best_tree.depth() << std::endl;
+    resultsFile << g << ","
+                << best_tree.getScore() << ","
+                << best_tree.getSteps() << ","
+                << best_tree.size() << ","
+                << best_tree.depth() << "\n";
+
+    // Replenish the population to NUM_TREE by producing new offspring via crossover and mutation.
+    int survivors = trees.size(); // after erasing worst half, e.g. survivors = NUM_TREE / 2
+    double crossoverRate = 0.7;   // 70% chance of crossover
+    int kTournament = 3;          // tournament size
+
     while (trees.size() < NUM_TREE) {
-      // Selected random "parent" tree from survivors
-      LinkedBinaryTree parent = trees[randInt(rng, 0, (NUM_TREE / 2) - 1)];
+      if (randDouble(rng) < crossoverRate) {
+        // --- CROSSOVER PATH ---
+        // pick two parents with tournament selection
+        LinkedBinaryTree parentA = pickParentTournament(trees, rng, survivors, kTournament);
+        LinkedBinaryTree parentB = pickParentTournament(trees, rng, survivors, kTournament);
 
-      // Create child tree with copy constructor
-      LinkedBinaryTree child(parent);
-      child.setGeneration(g);
+        // create two children
+        LinkedBinaryTree childA(parentA);
+        LinkedBinaryTree childB(parentB);
+        childA.setGeneration(g);
+        childB.setGeneration(g);
 
-      // Mutation
-      // Delete a randomly selected part of the child's tree
-      child.deleteSubtreeMutator(rng);
-      // Add a random subtree to the child
-      child.addSubtreeMutator(rng, MAX_DEPTH);
+        // perform crossover (with depth check)
+        childA.crossover(childB, rng, MAX_DEPTH);
 
-      trees.push_back(child);
+        // mutate both children
+        childA.deleteSubtreeMutator(rng);
+        childA.addSubtreeMutator(rng, MAX_DEPTH);
+        childB.deleteSubtreeMutator(rng);
+        childB.addSubtreeMutator(rng, MAX_DEPTH);
+
+        // add them to population
+        trees.push_back(childA);
+        if (trees.size() < NUM_TREE) {
+          trees.push_back(childB);
+        }
+      } else {
+        // --- MUTATION-ONLY PATH ---
+        LinkedBinaryTree parent = pickParentTournament(trees, rng, survivors, kTournament);
+        LinkedBinaryTree child(parent);
+        child.setGeneration(g);
+
+        // mutate child
+        child.deleteSubtreeMutator(rng);
+        child.addSubtreeMutator(rng, MAX_DEPTH);
+
+        trees.push_back(child);
+      }
     }
   }
 
-  // // Evaluate best tree with animation
-  // const int num_episode = 3;
-  // evaluate(rng, best_tree, num_episode, true, PARTIALLY_OBSERVABLE);
+  // Close the CSV file.
+  resultsFile.close();
 
-  // Print best tree info
-  std::cout << std::endl << "Best tree:" << std::endl;
+  // Print final best tree details.
+  std::cout << "\nBest tree:" << std::endl;
   best_tree.printExpression();
-  std::cout << endl;
-  std::cout << "Generation: " << best_tree.getGeneration() << endl;
+  std::cout << std::endl;
+  std::cout << "Generation: " << best_tree.getGeneration() << std::endl;
   std::cout << "Size: " << best_tree.size() << std::endl;
   std::cout << "Depth: " << best_tree.depth() << std::endl;
   std::cout << "Fitness: " << best_tree.getScore() << std::endl << std::endl;
 
+  return 0;
 }
