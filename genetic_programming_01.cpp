@@ -1,4 +1,4 @@
-#include <math.h>
+#include <cmath>
 #include <algorithm>
 #include <cstdlib>
 #include <iostream>
@@ -24,7 +24,7 @@ int randInt(mt19937& rng, const int& min, const int& max) {
 }
 
 // return true if op is a suported operation, otherwise return false
-bool isOp(string op) {
+bool isOp(const string& op) {
   if (op == "+")
     return true;
   else if (op == "-")
@@ -183,6 +183,7 @@ class LinkedBinaryTree {
 
 // Global memory cell for GP (used by memory operations)
 static double gpMemory = 0.0;
+
 
 // Global flag to indicate partially observable mode.
 // (Set this in main based on your experiment.)
@@ -367,43 +368,53 @@ void LinkedBinaryTree::deleteSubtreeMutator(mt19937& rng) {
 //===================================================
 
 void LinkedBinaryTree::deleteSubtreeMutator(mt19937& rng) {
+  // If empty or only root, do nothing
+  if (empty()) return;
   PositionList pl = positions();
-  // If only the root exists, there’s nothing to delete.
-  if (pl.size() <= 1) return;
+  if (pl.size() <= 1) return; // can't delete if only root
 
+  // Build list of non-root candidates
   vector<Node*> candidates;
-  for (auto pos : pl) {
-    if (!pos.isRoot())
+  for (auto& pos : pl) {
+    if (!pos.isRoot()) {
       candidates.push_back(pos.v);
+    }
   }
   if (candidates.empty()) return;
 
-  int idx = randInt(rng, 0, candidates.size() - 1);
+  // Choose one random node
+  int idx = randInt(rng, 0, (int)candidates.size() - 1);
   Node* target = candidates[idx];
   Node* parent = target->par;
-  if (parent == nullptr) return;  // safety check
+  if (!parent) return; // safety check
 
-  // Create a new terminal node ("a") to replace the deleted subtree.
-  Node* newNode = new Node;
-  newNode->elt = "a";
-  newNode->par = parent;
+  // Create a new terminal node to replace the subtree
+  Node* newTerm = new Node;
+  newTerm->elt = "a"; // or random from {a, b}, etc.
+  newTerm->par = parent;
 
-  if (parent->left == target)
-    parent->left = newNode;
-  else if (parent->right == target)
-    parent->right = newNode;
+  // Re-link parent's child pointer
+  if (parent->left == target) parent->left = newTerm;
+  else parent->right = newTerm;
 
-  // Free the removed subtree.
-  std::function<void(Node*)> freeSubtree = [&](Node* node) {
-    if (node == nullptr)
-      return;
-    freeSubtree(node->left);
-    freeSubtree(node->right);
-    delete node;
+  // Recursively free the old subtree
+  std::function<void(Node*)> freeSubtree = [&](Node* n) {
+    if (!n) return;
+    freeSubtree(n->left);
+    freeSubtree(n->right);
+    delete n;
   };
   freeSubtree(target);
-}
 
+  // Optional: If parent->elt is an operator that now doesn't have enough children,
+  // you can fix it by turning the operator into a terminal. For example:
+  /*
+  if (isOp(parent->elt)) {
+      int needed = arity(parent->elt);
+      // Check if left/right exist; if not, fix or turn parent->elt into "a"
+  }
+  */
+}
 
 
 //===============================================================================================================
@@ -413,52 +424,87 @@ void LinkedBinaryTree::deleteSubtreeMutator(mt19937& rng) {
 
 
 void LinkedBinaryTree::addSubtreeMutator(mt19937& rng, const int maxDepth, bool partially_observable) {
-  if (_root == NULL) return;
+    if (empty()) return;
 
-  // Get all positions in the tree.
-  PositionList pl = positions();
-  if (pl.empty()) return;
+    PositionList pl = positions();
+    if (pl.size() < 1) return;
 
-  // Pick a random node.
-  int randIndex = randInt(rng, 0, pl.size() - 1);
-  Node* nodeToMutate = pl[randIndex].v;
+    // Pick a random node
+    int idx = randInt(rng, 0, (int)pl.size() - 1);
+    Node* nodeToMutate = pl[idx].v;
 
-  // Save the original element.
-  string originalElt = nodeToMutate->elt;
-
-  // Choose a random operator based on whether we are in partially observable mode.
-  vector<string> operators;
-  if (partially_observable) {
-    operators = {"+", "-", "*", "/", ">", "abs", "READ_MEM", "WRITE_MEM"};
-  } else {
-    operators = {"+", "-", "*", "/", ">", "abs"};
-  }
-  int opIndex = randInt(rng, 0, operators.size() - 1);
-  string op = operators[opIndex];
-
-  // Replace the node's element with the new operator.
-  nodeToMutate->elt = op;
-
-  // If the node was terminal, attach a left child with the original element.
-  if (nodeToMutate->left == NULL) {
-    addLeftChild(Position(nodeToMutate));
-    nodeToMutate->left->elt = originalElt;
-  }
-
-  // If the operator is binary and there is no right child, add one.
-  if (arity(op) > 1 && nodeToMutate->right == NULL) {
-    addRightChild(Position(nodeToMutate));
-    int choice = randInt(rng, 0, 2);
-    if (choice == 0)
-      nodeToMutate->right->elt = "a";
-    else if (choice == 1)
-      nodeToMutate->right->elt = "b";
-    else {
-      double val = (randDouble(rng) * 2) - 1;
-      nodeToMutate->right->elt = to_string(val);
+    // Operators list depends on partialObservability
+    vector<string> ops;
+    if (partially_observable) {
+        ops = {"+", "-", "*", "/", ">", "abs", "READ_MEM", "WRITE_MEM"};
+    } else {
+        ops = {"+", "-", "*", "/", ">", "abs"};
     }
-  }
+    // Choose a new operator
+    int opIndex = randInt(rng, 0, (int)ops.size() - 1);
+    string newOp = ops[opIndex];
+
+    // Save old element if needed
+    string oldElt = nodeToMutate->elt;
+
+    // Replace the node's operator
+    nodeToMutate->elt = newOp;
+
+    // If it's unary, ensure left child exists. If not, create it as a terminal.
+    if (arity(newOp) == 1) {
+        if (!nodeToMutate->left) {
+            addLeftChild(Position(nodeToMutate));
+            nodeToMutate->left->elt = oldElt; // or "a" or random
+        }
+        // Right child must be null for a unary operator
+        if (nodeToMutate->right) {
+            // Optionally free or handle
+            // For simplicity: free the right subtree
+            std::function<void(Node*)> freeSubtree = [&](Node* n) {
+                if (!n) return;
+                freeSubtree(n->left);
+                freeSubtree(n->right);
+                delete n;
+            };
+            freeSubtree(nodeToMutate->right);
+            nodeToMutate->right = nullptr;
+        }
+    }
+    // If it's binary, ensure both children exist
+    else if (arity(newOp) == 2) {
+        if (!nodeToMutate->left) {
+            addLeftChild(Position(nodeToMutate));
+            nodeToMutate->left->elt = oldElt; // or random
+        }
+        if (!nodeToMutate->right) {
+            addRightChild(Position(nodeToMutate));
+            nodeToMutate->right->elt = "b"; // or random
+        }
+    }
+    // If it's a 0-arity operator (like "READ_MEM" if you use that as a terminal),
+    // we must remove any children it has.
+    else if (arity(newOp) == 0) {
+        // Freed or replaced children
+        std::function<void(Node*)> freeSubtree = [&](Node* n) {
+            if (!n) return;
+            freeSubtree(n->left);
+            freeSubtree(n->right);
+            delete n;
+        };
+        freeSubtree(nodeToMutate->left);
+        freeSubtree(nodeToMutate->right);
+        nodeToMutate->left = nullptr;
+        nodeToMutate->right = nullptr;
+    }
+
+    // (Optional) Depth check: if the new subtree is too deep, revert or prune
+    /*
+    if (depth() > maxDepth) {
+        // revert nodeToMutate->elt = oldElt ...
+    }
+    */
 }
+
 
 
 //===============================================================================================================
@@ -571,57 +617,63 @@ LinkedBinaryTree createExpressionTree(string postfix) {
 }
 
 void LinkedBinaryTree::randomExpressionTree(Node* p, const int& maxDepth, mt19937& rng) {
-  if (p == NULL) return;
+  if (!p) return;
 
+  // Base case: if maxDepth <= 0, create a terminal
   if (maxDepth <= 0) {
-    // Terminal: choose between "a", "b", or a constant.
+    // Choose among "a", "b", or a constant
     int choice = randInt(rng, 0, 2);
-    if (choice == 0)
+    if (choice == 0) {
       p->elt = "a";
-    else if (choice == 1)
+    } else if (choice == 1) {
       p->elt = "b";
-    else {
-      double val = (randDouble(rng) * 2) - 1;
+    } else {
+      double val = (randDouble(rng) * 2) - 1; // random constant in [-1,1]
       p->elt = to_string(val);
     }
     return;
   }
 
-  // Decide whether to create an operator node.
+  // Decide if we create an operator or a terminal
   bool createOperator = (maxDepth > 1) ? randChoice(rng) : false;
-  if (createOperator) {
-    vector<string> ops;
-    if (gPartiallyObservable)
-      ops = {"+", "-", "*", "/", ">", "abs", "READ_MEM", "WRITE_MEM"};
-    else
-      ops = {"+", "-", "*", "/", ">", "abs"};
 
-    int opIndex = randInt(rng, 0, ops.size() - 1);
+  if (createOperator) {
+    // Build list of operators
+    vector<string> ops;
+    if (gPartiallyObservable) {
+      ops = {"+","-","*","/",">","abs","READ_MEM","WRITE_MEM"};
+    } else {
+      ops = {"+","-","*","/",">","abs"};
+    }
+
+    // Choose an operator
+    int opIndex = randInt(rng, 0, (int)ops.size() - 1);
     string op = ops[opIndex];
     p->elt = op;
 
-    // Build left child.
+    // Build left child
     addLeftChild(Position(p));
     randomExpressionTree(p->left, maxDepth - 1, rng);
 
-    // If binary operator, build right child.
+    // If a binary operator, create right child
     if (arity(op) > 1) {
       addRightChild(Position(p));
       randomExpressionTree(p->right, maxDepth - 1, rng);
     }
   } else {
-    // Terminal node.
+    // Create a terminal
     int choice = randInt(rng, 0, 2);
-    if (choice == 0)
+    if (choice == 0) {
       p->elt = "a";
-    else if (choice == 1)
+    } else if (choice == 1) {
       p->elt = "b";
-    else {
+    } else {
       double val = (randDouble(rng) * 2) - 1;
       p->elt = to_string(val);
     }
   }
 }
+
 
 
 //===================================================
@@ -673,9 +725,9 @@ void evaluate(mt19937& rng, LinkedBinaryTree& t, const int& num_episode,
 
 struct LexLessThan {
   bool operator()(const LinkedBinaryTree& x, const LinkedBinaryTree& y) const {
-    double scoreDiff = fabs(x.getScore() - y.getScore());
-    if (scoreDiff < 0.01) {
-      // Favor simpler trees (fewer nodes) when scores are similar
+    double diff = fabs(x.getScore() - y.getScore());
+    // If difference < 0.01 => prefer smaller tree
+    if (diff < 0.01) {
       return x.size() > y.size();
     } else {
       // Otherwise, compare by score
@@ -685,88 +737,93 @@ struct LexLessThan {
 };
 
 
+#include <fstream>
+#include <iostream>
+#include <vector>
+#include <random>
+#include <algorithm>
+#include "cartCentering.h"
 
-#include <fstream>  // For file output
+using namespace std;
 
 int main() {
   mt19937 rng(42);
-  // Experiment parameters
+  // Experiment parameters for Part 4 (partially observable)
   const int NUM_TREE = 50;
   const int MAX_DEPTH_INITIAL = 1;
   const int MAX_DEPTH = 20;
   const int NUM_EPISODE = 20;
   const int MAX_GENERATIONS = 100;
-  const bool PARTIALLY_OBSERVABLE = false; // For Part 2, this is false
+  const bool PARTIALLY_OBSERVABLE = true;
 
-  // --- Experiment 1: Default Comparator (using operator<) ---
-  vector<LinkedBinaryTree> treesDefault;
+  // Open CSV file for output
+  ofstream csvFile("results_part4.csv");
+  csvFile << "generation,fitness,steps,size,depth\n";
+
+  // Create an initial population of expression trees
+  vector<LinkedBinaryTree> trees;
   for (int i = 0; i < NUM_TREE; i++) {
+    // Use the new function signature to enable memory ops if PARTIALLY_OBSERVABLE is true
     LinkedBinaryTree t = createRandExpressionTree(MAX_DEPTH_INITIAL, rng, PARTIALLY_OBSERVABLE);
-    treesDefault.push_back(t);
+    trees.push_back(t);
   }
-  vector<int> bestSizeDefault(MAX_GENERATIONS, 0);
+
+  LinkedBinaryTree best_tree;
+  cout << "generation,fitness,steps,size,depth" << endl;
   for (int g = 1; g <= MAX_GENERATIONS; g++) {
-    // Evaluate each tree in the population
-    for (auto &t : treesDefault) {
-      if (t.getGeneration() < g - 1) continue;
+
+    // Fitness evaluation: in partially observable mode, evaluate() uses 0.0 for velocity
+    for (auto& t : trees) {
+      if (t.getGeneration() < g - 1) continue;  // Skip trees not updated for this generation
       evaluate(rng, t, NUM_EPISODE, false, PARTIALLY_OBSERVABLE);
     }
-    // Sort using the default overloaded operator<
-    std::sort(treesDefault.begin(), treesDefault.end());
-    // Remove worst 50% of trees
-    treesDefault.erase(treesDefault.begin(), treesDefault.begin() + NUM_TREE / 2);
+
+    // Sort trees using the overloaded operator<
+    std::sort(trees.begin(), trees.end());
+
+    // Erase worst 50% of trees (first half of vector)
+    trees.erase(trees.begin(), trees.begin() + NUM_TREE / 2);
+
     // Best tree is the last element
-    LinkedBinaryTree best = treesDefault.back();
-    bestSizeDefault[g - 1] = best.size();
-    // Replenish the population via mutation
-    while (treesDefault.size() < NUM_TREE) {
-      LinkedBinaryTree parent = treesDefault[randInt(rng, 0, (NUM_TREE / 2) - 1)];
+    best_tree = trees[trees.size() - 1];
+    cout << g << ","
+         << best_tree.getScore() << ","
+         << best_tree.getSteps() << ","
+         << best_tree.size() << ","
+         << best_tree.depth() << endl;
+    csvFile << g << ","
+            << best_tree.getScore() << ","
+            << best_tree.getSteps() << ","
+            << best_tree.size() << ","
+            << best_tree.depth() << "\n";
+
+    // Selection and mutation: replenish population via mutation
+    while (trees.size() < NUM_TREE) {
+      // Select a random parent from the survivors (top half)
+      LinkedBinaryTree parent = trees[randInt(rng, 0, (NUM_TREE / 2) - 1)];
+
+      // Create a child tree with a deep copy of the parent
       LinkedBinaryTree child(parent);
       child.setGeneration(g);
+
+      // Mutation: delete a randomly selected subtree and add a random subtree
       child.deleteSubtreeMutator(rng);
-      // Call addSubtreeMutator with third parameter false (memory off)
-      child.addSubtreeMutator(rng, MAX_DEPTH, false);
-      treesDefault.push_back(child);
+      child.addSubtreeMutator(rng, MAX_DEPTH, PARTIALLY_OBSERVABLE);
+
+      trees.push_back(child);
     }
   }
 
-  // --- Experiment 2: LexLessThan Comparator ---
-  vector<LinkedBinaryTree> treesLex;
-  for (int i = 0; i < NUM_TREE; i++) {
-    LinkedBinaryTree t = createRandExpressionTree(MAX_DEPTH_INITIAL, rng, PARTIALLY_OBSERVABLE);
-    treesLex.push_back(t);
-  }
-  vector<int> bestSizeLex(MAX_GENERATIONS, 0);
-  for (int g = 1; g <= MAX_GENERATIONS; g++) {
-    for (auto &t : treesLex) {
-      if (t.getGeneration() < g - 1) continue;
-      evaluate(rng, t, NUM_EPISODE, false, PARTIALLY_OBSERVABLE);
-    }
-    // Sort using LexLessThan comparator
-    std::sort(treesLex.begin(), treesLex.end(), LexLessThan());
-    treesLex.erase(treesLex.begin(), treesLex.begin() + NUM_TREE / 2);
-    LinkedBinaryTree best = treesLex.back();
-    bestSizeLex[g - 1] = best.size();
-    while (treesLex.size() < NUM_TREE) {
-      LinkedBinaryTree parent = treesLex[randInt(rng, 0, (NUM_TREE / 2) - 1)];
-      LinkedBinaryTree child(parent);
-      child.setGeneration(g);
-      child.deleteSubtreeMutator(rng);
-      // Use the three-parameter version, passing false
-      child.addSubtreeMutator(rng, MAX_DEPTH, false);
-      treesLex.push_back(child);
-    }
-  }
+  csvFile.close();
 
-  // --- Write CSV file for comparison ---
-  std::ofstream outFile("comparison.csv");
-  outFile << "generation,default_size,lex_size\n";
-  for (int g = 1; g <= MAX_GENERATIONS; g++) {
-    outFile << g << "," << bestSizeDefault[g - 1] << "," << bestSizeLex[g - 1] << "\n";
-  }
-  outFile.close();
+  // Print final best tree details
+  cout << endl << "Best tree:" << endl;
+  best_tree.printExpression();
+  cout << endl;
+  cout << "Generation: " << best_tree.getGeneration() << endl;
+  cout << "Size: " << best_tree.size() << endl;
+  cout << "Depth: " << best_tree.depth() << endl;
+  cout << "Fitness: " << best_tree.getScore() << endl << endl;
 
-  std::cout << "Experiments complete. Results saved to comparison.csv\n";
   return 0;
 }
-
